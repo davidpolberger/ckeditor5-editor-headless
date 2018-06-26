@@ -1,118 +1,97 @@
 /**
- * @license Copyright (c) 2003-2017, CKSource - Frederico Knabben. All rights reserved.
+ * @license Copyright (c) 2003-2018, CKSource - Frederico Knabben. All rights reserved.
  * For licensing, see LICENSE.md.
  *
  * The content of this file has been adapted from the CKEditor 5 documentation
- * describing how to create a custom editor using Bootstrap.
+ * describing how to create a custom editor using Bootstrap in combination with
+ * CKSource's inline editor.
  */
 
-// Basic classes to create an editor.
-import StandardEditor from '@ckeditor/ckeditor5-core/src/editor/standardeditor';
-import InlineEditableUIView from '@ckeditor/ckeditor5-ui/src/editableui/inline/inlineeditableuiview';
+/**
+ * @module editor-headless/headlesseditor
+ */
+
+import Editor from '@ckeditor/ckeditor5-core/src/editor/editor';
+import DataApiMixin from '@ckeditor/ckeditor5-core/src/editor/utils/dataapimixin';
+import ElementApiMixin from '@ckeditor/ckeditor5-core/src/editor/utils/elementapimixin';
+import attachToForm from '@ckeditor/ckeditor5-core/src/editor/utils/attachtoform';
 import HtmlDataProcessor from '@ckeditor/ckeditor5-engine/src/dataprocessor/htmldataprocessor';
-import ElementReplacer from '@ckeditor/ckeditor5-utils/src/elementreplacer';
+import HeadlessEditorUI from './headlesseditorui';
+import HeadlessEditorUIView from './headlesseditoruiview';
+import setDataInElement from '@ckeditor/ckeditor5-utils/src/dom/setdatainelement';
+import getDataFromElement from '@ckeditor/ckeditor5-utils/src/dom/getdatafromelement';
+import mix from '@ckeditor/ckeditor5-utils/src/mix';
 
-// Basic features that every editor should enable.
-import Clipboard from '@ckeditor/ckeditor5-clipboard/src/clipboard';
-import Enter from '@ckeditor/ckeditor5-enter/src/enter';
-import Typing from '@ckeditor/ckeditor5-typing/src/typing';
-import Paragraph from '@ckeditor/ckeditor5-paragraph/src/paragraph';
-import UndoEngine from '@ckeditor/ckeditor5-undo/src/undoengine';
+export default class HeadlessEditor extends Editor {
+  /**
+   * Creates an instance of the headless editor.
+   *
+   * @protected
+   * @param {HTMLElement} element The DOM element that will be the source for the created editor
+   * (on which the editor will be initialized).
+   * @param {module:core/editor/editorconfig~EditorConfig} config The editor configuration.
+   */
+  constructor( element, config ) {
+    super( config );
 
-// Basic features to be associated with the edited content.
-import BoldEngine from '@ckeditor/ckeditor5-basic-styles/src/boldengine';
-import ItalicEngine from '@ckeditor/ckeditor5-basic-styles/src/italicengine';
-import UnderlineEngine from '@ckeditor/ckeditor5-basic-styles/src/underlineengine';
-import HeadingEngine from '@ckeditor/ckeditor5-heading/src/headingengine';
+    // Remember the element the editor is created with.
+    this.element = element;
 
-// Extending the StandardEditor that brings lots of essential API.
-export default class HeadlessEditor extends StandardEditor {
-    constructor( element, config ) {
-        super( element, config );
+    // Use the HTML data processor in this editor.
+    this.data.processor = new HtmlDataProcessor();
 
-        // Create the ("main") root element of the model tree.
-        this.document.createRoot();
+    // Create the ("main") root element of the model tree.
+    this.model.document.createRoot();
 
-        // Use the HTML data processor in this editor.
-        this.data.processor = new HtmlDataProcessor();
+    // The UI layer of the editor.
+    this.ui = new HeadlessEditorUI( this, new HeadlessEditorUIView( this.locale, element ) );
 
-        // This editor uses a single editable view in DOM.
-        this.editable = new InlineEditableUIView( this.locale );
+    // When editor#element is a textarea inside a form element
+    // then content of this textarea will be updated on form submit.
+    attachToForm( this );
+  }
 
-        // A helper to easily replace the editor#element with editor.editable#element.
-        this._elementReplacer = new ElementReplacer();
+  /**
+   * Destroys the editor instance, releasing all resources used by it.
+   *
+   * Updates the original editor element with the data.
+   *
+   * @returns {Promise}
+   */
+  destroy() {
+    // Cache the data, then destroy.
+    // It's safe to assume that the model->view conversion will not work after super.destroy().
+    const data = this.getData();
 
-        /* TODO: Create a mock object of a "ui" object, enabling plug-ins to
-         * work without crashing. It is possible to get a headless editor
-         * working without using this mock object by only using the "engine
-         * parts" of plug-ins, but engines do not include keystroke handling.
-         * This is the easiest way to get keystrokes working temporarily while
-         * the CKEditor team devises a better solution, without having to
-         * re-implement keystroke handling.
-         *
-         * Refer to https://github.com/ckeditor/ckeditor5/issues/488 for more
-         * information.
-         */
-        this.ui = {
-            componentFactory: {
-                add: function() {}
-            },
-            focusTracker: {
-                add: function() {}
-            },
-            view: {
-                body: {
-                    add: function() {}
-                }
-            }
-        };
-    }
+    this.ui.destroy();
 
-    destroy() {
-        // When destroyed, editor sets the output of editor#getData() into editor#element...
-        this.updateEditorElement();
+    return super.destroy()
+      .then( () => setDataInElement( this.element, data ) );
+  }
 
-        // ...and restores editor#element.
-        this._elementReplacer.restore();
+  /**
+   * Creates a headless editor instance.
+   */
+  static create( element, config ) {
+    return new Promise( resolve => {
+      const editor = new this( element, config );
 
-        return super.destroy();
-    }
-
-    static create( element, config ) {
-        return new Promise( resolve => {
-            const editor = new this( element, config );
-            const editable = editor.editable;
-
-            resolve(
-                editor.initPlugins()
-                    // Render the editable view in DOM first.
-                    .then( () => editable.render() )
-                    // Replace the editor#element with editor.editable#element.
-                    .then( () => editor._elementReplacer.replace( element, editable.element ) )
-                    // Handle the UI of the editor.
-                    .then( () => {
-                        // Create an editing root in the editing layer. It will correspond to the
-                        // document root created in the constructor().
-                        const editingRoot = editor.editing.createRoot( 'div' );
-
-                        // Bind the basic attributes of the editable in DOM with the editing layer.
-                        editable.bind( 'isReadOnly' ).to( editingRoot );
-                        editable.bind( 'isFocused' ).to( editor.editing.view );
-                        editable.name = editingRoot.rootName;
-
-                        // Tell the world that the UI of the editor is ready to use.
-                        editor.fire( 'uiReady' );
-                    } )
-                    // Bind the editor editing layer to the editable in DOM.
-                    .then( () => editor.editing.view.attachDomRoot( editable.element ) )
-                    .then( () => editor.loadDataFromEditorElement() )
-                    // Fire the events that announce that the editor is complete and ready to use.
-                    .then( () => {
-                        editor.fire( 'dataReady' );
-                        editor.fire( 'ready' );
-                    } )
-                    .then( () => editor )
-            );
-        } );
-    }
+      resolve(
+	editor.initPlugins()
+	  .then( () => {
+	    editor.ui.init();
+	    editor.fire( 'uiReady' );
+	  } )
+	  .then( () => editor.data.init( getDataFromElement( element ) ) )
+	  .then( () => {
+	    editor.fire( 'dataReady' );
+	    editor.fire( 'ready' );
+	  } )
+	  .then( () => editor )
+      );
+    } );
+  }
 }
+
+mix( HeadlessEditor, DataApiMixin );
+mix( HeadlessEditor, ElementApiMixin );
